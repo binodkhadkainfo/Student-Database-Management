@@ -1,1 +1,122 @@
-fadfads
+import sqlite3
+import pandas as pd
+from datetime import datetime
+import tkinter as tk
+from tkinter import filedialog
+
+def load_csv_file():
+    root = tk.Tk()
+    root.withdraw()
+    file_path = filedialog.askopenfilename(
+        title="Select Student Data CSV",
+        filetypes=[("CSV files", "*.csv")]
+    )
+    if not file_path:
+        print("❌ No file selected. Exiting.")
+        exit()
+    return file_path
+
+def validate_data(df):
+    required_columns = {"name", "gender", "grade", "marks", "birth_year"}
+    missing_cols = required_columns - set(df.columns)
+    if missing_cols:
+        print(f"❌ Missing required columns: {missing_cols}")
+        return False
+    for col in ["marks", "birth_year"]:
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            print(f"❌ Column '{col}' must be numeric.")
+            return False
+    return True
+
+def create_database(df):
+    conn = sqlite3.connect(":memory:")
+    df.to_sql("Students", conn, index=False, if_exists='replace')
+    return conn
+
+def run_query(conn, query):
+    try:
+        return pd.read_sql(query, conn)
+    except Exception as e:
+        print(f"❌ Query failed: {e}")
+        return None
+
+def print_and_return(conn, query, title):
+    print(f"\n=== {title} ===")
+    df = run_query(conn, query)
+    if df is not None and not df.empty:
+        print(df)
+    else:
+        print("No data found.")
+    return df
+
+def export_data(df):
+    root = tk.Tk()
+    root.withdraw()
+    save_path = filedialog.asksaveasfilename(
+        title="Save CSV file",
+        defaultextension=".csv",
+        filetypes=[("CSV files", "*.csv")]
+    )
+    if save_path:
+        df.to_csv(save_path, index=False)
+        print(f"✅ Data exported to: {save_path}")
+    else:
+        print("❌ Export cancelled.")
+
+def main():
+    file_path = load_csv_file()
+    try:
+        student_df = pd.read_csv(file_path)
+    except Exception as e:
+        print(f"❌ Failed to load CSV: {e}")
+        exit()
+    if not validate_data(student_df):
+        exit()
+
+    conn = create_database(student_df)
+    current_year = datetime.now().year
+
+    queries = {
+        "1": ("Top 3 Students by Marks", "SELECT name, grade, marks FROM Students ORDER BY marks DESC LIMIT 3"),
+        "2": ("Average Marks by Grade", "SELECT grade, AVG(marks) AS average_marks FROM Students GROUP BY grade"),
+        "3": ("Student Count by Gender", "SELECT gender, COUNT(*) AS total FROM Students GROUP BY gender"),
+        "4": ("Student Count by Birth Year", "SELECT birth_year, COUNT(*) AS total FROM Students GROUP BY birth_year"),
+        "5": ("Pass/Fail Summary", "SELECT CASE WHEN marks >= 40 THEN 'Pass' ELSE 'Fail' END AS status, COUNT(*) AS total FROM Students GROUP BY status"),
+        "6": ("Grade-wise Gender Split", "SELECT grade, gender, COUNT(*) AS total FROM Students GROUP BY grade, gender ORDER BY grade, gender"),
+        "7": ("Student Age Estimation", f"SELECT name, birth_year, {current_year} - birth_year AS age FROM Students"),
+        "8": ("Students Above Grade Average", "WITH GradeAvg AS (SELECT grade, AVG(marks) AS avg_marks FROM Students GROUP BY grade) SELECT s.name, s.grade, s.marks, g.avg_marks FROM Students s JOIN GradeAvg g ON s.grade = g.grade WHERE s.marks > g.avg_marks ORDER BY s.grade"),
+        "9": ("Average Marks by Gender and Grade", "SELECT grade, gender, AVG(marks) AS avg_marks FROM Students GROUP BY grade, gender ORDER BY grade, gender"),
+        "10": ("Top Student in Each Grade", "SELECT s1.grade, s1.name, s1.marks FROM Students s1 WHERE s1.marks = (SELECT MAX(s2.marks) FROM Students s2 WHERE s2.grade = s1.grade) ORDER BY s1.grade"),
+        "11": ("Students with Total Marks and Rank", "SELECT name, grade, marks, RANK() OVER (PARTITION BY grade ORDER BY marks DESC) AS rank FROM Students ORDER BY grade, rank"),
+        "12": ("Export Full Student Data", None)
+    }
+
+    while True:
+        print("\nSelect a query to run or export:")
+        for k, (title, _) in queries.items():
+            print(f"{k}. {title}")
+        print("Q. Quit")
+
+        choice = input("Enter choice: ").strip().upper()
+        if choice == "Q":
+            print("Exiting...")
+            break
+        if choice not in queries:
+            print("❌ Invalid choice, try again.")
+            continue
+
+        title, sql = queries[choice]
+        if choice == "12":
+            df = pd.read_sql("SELECT * FROM Students", conn)
+            export_data(df)
+        else:
+            df = print_and_return(conn, sql, title)
+            if df is not None and not df.empty:
+                export = input("Export this result? (y/n): ").strip().lower()
+                if export == 'y':
+                    export_data(df)
+
+    conn.close()
+
+if __name__ == "__main__":
+    main()
